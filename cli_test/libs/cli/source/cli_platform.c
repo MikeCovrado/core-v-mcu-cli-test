@@ -177,7 +177,11 @@ void CLI_task( void *pParameter )
 
     //wait_ffe_fpga_load();
     /* set to 1 to have a timestamp on the side */
+#ifdef SIM_BUILD
+    vTaskDelay(1);
+#else
     vTaskDelay(100);
+#endif
     
     CLI_common.timestamps = 0;
 

@@ -392,6 +392,7 @@ for (int i = 0 ; i < 32 ; i ++){
 		udma_i2cm_open(id, 400000);  //200000
 	}
 
+#ifndef SIM_BUILD
 	for(i=0; i<N_QSPIM; i++ )
 	{
 		setQspimPinMux(i);
@@ -425,6 +426,7 @@ for (int i = 0 ; i < 32 ; i ++){
 	hal_set_apb_i2cs_slave_on_off(1);
 	if( hal_get_apb_i2cs_slave_address() !=  MY_I2C_SLAVE_ADDRESS )
 			hal_set_apb_i2cs_slave_address(MY_I2C_SLAVE_ADDRESS);
+#endif /* SIM_BUILD */
 
 }
 

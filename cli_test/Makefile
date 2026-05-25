@@ -1,79 +1,265 @@
-# Copyright 2020 ETH Zurich
+# Standalone Makefile for core-v-mcu cli-test
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# Targets:
+#   make all         - Build cli_test ELF + binary artifacts
+#   make sim         - Build, update Verilator mem_init, run simulation
+#   make fpga-gdb    - Build, load onto FPGA via OpenOCD/GDB (fast iteration)
+#   make fpga-flash  - Build, program QSPI flash via spi_load.py
+#   make tools       - Build native host utility tools
+#   make clean       - Remove build artifacts and compiled tools
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-#
-# SPDX-License-Identifier: Apache-2.0
-# Author: Robert Balas (balasr@iis.ee.ethz.ch)
+# Overridable variables:
+#   SIM_CYCLES=N     - Number of simulation cycles (default 2000)
+#   CROSS=prefix-    - Cross-compiler prefix (default riscv32-corev-elf-)
 
-# Description: Makefile to build the blinky and other demo applications. Note
-# that it supports the usual GNU Make implicit variables e.g. CC, CFLAGS,
-# CPPFLAGS etc. Consult the GNU Make manual for move information about these.
+CROSS   ?= riscv32-corev-elf-
+CC       = $(CROSS)gcc
+OBJCOPY  = $(CROSS)objcopy
 
-# Notes:
-# Useful targets
-# make all      Compile and link
-# make run      Simulate SoC
-# make backup   Record your simulation run
-# make analyze  Run analysis scripts on the simulation result
+BUILD_DIR  = build
+SIM_DIR    = ../../../core-v-mcu/claude/sim
+SIM_CYCLES ?= 2000
 
-# Important Variables
-# PROG       Needs to be set to your executables name
-# USER_SRCS  Add your source files here (use +=)
-# CPPFLAGS   Add your include search paths and macro definitions (use +=)
+# ── Source files ─────────────────────────────────────────────────────────────
 
-# Adding common compile flags when using default_flags.mk.
-# Compile options (passed to make) e.g. make NDEBUG=yes
-# NDEBUG    Make release build
-# LIBC      Link against libc
-# LTO       Enable link time optimization
-# SANITIZE  Enable gcc sanitizer for debugging memory access problems
-# STACKDBG  Enable stack debugging information and warnings.
-#           By default 1 KiB but can be changed with MAXSTACKSIZE=your_value
+APP_SRCS = \
+	app/main.c \
+	app/cli.c \
+	app/cli_gpio_tests.c \
+	app/cli_i2c_tests.c \
+	app/cli_i2cs_tests.c \
+	app/cli_interrupt_tests.c \
+	app/cli_adv_timer_unit_tests.c \
+	app/cli_efpga_tests.c \
+	app/cli_efpgaio_tests.c \
+	app/cli_fcb_tests.c \
+	app/qspi_tests.c \
+	app/sdio_tests.c \
+	app/barrMemTest.c \
+	app/gpio_map.c \
+	app/i2c_task.c \
+	app/programFPGA.c \
+	app/cam_tests.c
 
+HAL_SRCS = \
+	hal/source/hal_gpio.c \
+	hal/source/hal_gpio_pulp.c \
+	hal/source/hal_fll.c \
+	hal/source/hal_fll_pi.c \
+	hal/source/hal_irq.c \
+	hal/source/hal_timer_irq.c \
+	hal/source/hal_fc_event.c \
+	hal/source/hal_apb_i2cs.c \
+	hal/source/hal_pinmux.c \
+	hal/source/hal_pinmux1.c \
+	hal/source/hal_soc_eu.c
 
-# indicate this repository's root folder
-PROJ_ROOT = $(shell git rev-parse --show-toplevel)
+DRV_SRCS = \
+	drivers/source/udma_uart_driver.c \
+	drivers/source/udma_i2cm_driver.c \
+	drivers/source/udma_qspi_driver.c \
+	drivers/source/udma_sdio_driver.c \
+	drivers/source/udma_cam_driver.c
 
-# good defaults for many environment variables
-include $(PROJ_ROOT)/common/default_flags.mk
+KERNEL_SRCS = \
+	kernel/croutine.c \
+	kernel/event_groups.c \
+	kernel/list.c \
+	kernel/queue.c \
+	kernel/stream_buffer.c \
+	kernel/tasks.c \
+	kernel/timers.c \
+	kernel/portable/GCC/RISC-V/port.c \
+	kernel/portable/MemMang/heap_4.c
 
-# manually set CFLAGS to disable some warnings (-Wconversion)
+CLI_SRCS = \
+	libs/cli/source/cli_args.c \
+	libs/cli/source/cli_filesystem.c \
+	libs/cli/source/cli_hexdump.c \
+	libs/cli/source/cli_io.c \
+	libs/cli/source/cli_loop.c \
+	libs/cli/source/cli_misc.c \
+	libs/cli/source/cli_platform.c \
+	libs/cli/source/cli_stdcmds.c
+
+UTIL_SRCS = \
+	libs/utils/source/dbg_uart.c
+
+TARGET_SRCS = \
+	target/core-v-mcu/core-v-mcu.c
+
+C_SRCS = $(APP_SRCS) $(HAL_SRCS) $(DRV_SRCS) $(KERNEL_SRCS) $(CLI_SRCS) $(UTIL_SRCS) $(TARGET_SRCS)
+
+ASM_SRCS = \
+	target/crt0.S \
+	target/vectors.S \
+	kernel/portable/GCC/RISC-V/portASM.S
+
+# ── Flags ────────────────────────────────────────────────────────────────────
+
+INCLUDES = \
+	-I. \
+	-Ikernel/include \
+	-Ikernel/portable/GCC/RISC-V \
+	-Ikernel/portable/GCC/RISC-V/chip_specific_extensions/PULPissimo \
+	-Ihal/include \
+	-Idrivers/include \
+	-Iapp/include \
+	-Ilibs/cli/include \
+	-Ilibs/utils/include \
+	-Itarget/core-v-mcu/include
+
+SIM_BUILD  ?= 0
+
 CFLAGS = \
-	-march=rv32imac -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore \
+	-march=rv32imc_zicsr -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore \
 	-fsigned-char -ffunction-sections -fdata-sections \
 	-std=gnu11 \
 	-Wall -Wextra -Wshadow -Wformat=2 -Wundef \
-	-Wno-unused-parameter -Wno-unused-variable \
+	-Wno-unused-parameter -Wno-unused-variable -Wconversion \
 	-Og -g3 \
-	-DFEATURE_CLUSTER=0 -D__PULP__=1 -DASYNC=0 -DTRACE_UART -DPI_LOG_LOCAL_LEVEL=5 -DDEBUG \
-        -fstack-usage -Wstack-usage=1024
+	-DFEATURE_CLUSTER=0 -D__PULP__=1 -DASYNC=0 -DTRACE_UART \
+	-DPI_LOG_LOCAL_LEVEL=5 -DDEBUG \
+	-DportasmHANDLE_INTERRUPT=vSystemIrqHandler \
+	-DSTREAM_CHECK_ITERATIONS=2 \
+	-DmainCREATE_SIMPLE_BLINKY_DEMO_ONLY=0 \
+	$(INCLUDES)
 
-# rtos, pulp and pmsis sources
-include $(PROJ_ROOT)/common/freertos_pmsis_srcs.mk
+ifeq ($(SIM_BUILD),1)
+CFLAGS += -DSIM_BUILD
+endif
 
-# application name
-PROG = uart_test
+ASFLAGS = \
+	-march=rv32imc_zicsr -mabi=ilp32 \
+	-DportasmHANDLE_INTERRUPT=vSystemIrqHandler \
+	-DportasmSKIP_ADDITIONAL_REGISTERS \
+	-Ikernel/portable/GCC/RISC-V/chip_specific_extensions/PULPissimo
 
-# application/user specific code
-USER_SRCS = uart_test.c
+LDFLAGS = \
+	-T target/core-v-mcu/core-v-mcu.ld \
+	-nostartfiles \
+	-Wl,--gc-sections \
+	-lgcc -lc -lm
 
-# FreeRTOS.h
-CPPFLAGS += $(addprefix -I$(VPATH)/, ".")
+# ── Object file lists ─────────────────────────────────────────────────────────
 
-CPPFLAGS += -DportasmHANDLE_INTERRUPT=vSystemIrqHandler
-##CPPFLAGS += -DUSE_STDIO
-## number of error check polls before the tests is conclueded as being successful
-CPPFLAGS += -DSTREAM_CHECK_ITERATIONS=2
+C_OBJS   = $(addprefix $(BUILD_DIR)/,$(C_SRCS:.c=.o))
+ASM_OBJS = $(addprefix $(BUILD_DIR)/,$(ASM_SRCS:.S=.o))
 
-# compile, simulation and analysis targets
-include $(PROJ_ROOT)/common/default_targets.mk
+# N25Q driver lives in a directory with a space — handled via explicit rules below
+N25Q_OBJS = $(BUILD_DIR)/app/N25Q.o $(BUILD_DIR)/app/Serialize.o
+
+ALL_OBJS = $(C_OBJS) $(ASM_OBJS) $(N25Q_OBJS)
+
+# ── N25Q driver (space in directory name — use escaped paths and quoted shell) ─
+
+N25Q_DIR = app/N25Q_16Mb-1Gb_Device_Driver\ V2.1
+
+$(BUILD_DIR)/app/N25Q.o: $(N25Q_DIR)/N25Q.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c "app/N25Q_16Mb-1Gb_Device_Driver V2.1/N25Q.c" -o "$@"
+
+$(BUILD_DIR)/app/Serialize.o: $(N25Q_DIR)/Serialize.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c "app/N25Q_16Mb-1Gb_Device_Driver V2.1/Serialize.c" -o "$@"
+
+# ── Native host tools ─────────────────────────────────────────────────────────
+
+INTERLEAVED = utils/InterleavedRAMFileGen/InterleavedRAMFileGen
+BIN2TXT     = utils/bin2txt/bin2txt
+
+# ── Primary targets ───────────────────────────────────────────────────────────
+
+.PHONY: all sim fpga-gdb fpga-flash tools clean
+
+all: $(BUILD_DIR)/cli_test $(BUILD_DIR)/cli_test.bin $(BUILD_DIR)/cli.bin $(BUILD_DIR)/cli_sim.bin
+
+# ── Link ─────────────────────────────────────────────────────────────────────
+
+$(BUILD_DIR)/cli_test: $(ALL_OBJS)
+	$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
+	$(CROSS)size $@
+
+# ── Binary artifacts ──────────────────────────────────────────────────────────
+
+$(BUILD_DIR)/cli_test.bin: $(BUILD_DIR)/cli_test
+	$(OBJCOPY) -O binary $< $@
+
+$(BUILD_DIR)/cli.bin: $(BUILD_DIR)/cli_test.bin header.bin
+	cat header.bin $< > $@
+
+$(BUILD_DIR)/cli_sim.bin: $(BUILD_DIR)/cli_test.bin header_sim.bin
+	cat header_sim.bin $< > $@
+
+# ── Compile C sources ─────────────────────────────────────────────────────────
+
+$(BUILD_DIR)/%.o: %.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+# ── Assemble .S sources ───────────────────────────────────────────────────────
+
+$(BUILD_DIR)/%.o: %.S
+	@mkdir -p $(dir $@)
+	$(CC) $(ASFLAGS) -c $< -o $@
+
+# ── Native host tools ─────────────────────────────────────────────────────────
+
+tools: $(INTERLEAVED) $(BIN2TXT)
+
+$(INTERLEAVED): utils/InterleavedRAMFileGen/InterleavedRAMFileGen.c
+	gcc -o $@ $<
+
+$(BIN2TXT): utils/bin2txt/main.c
+	gcc -o $@ $<
+
+# ── Verilator simulation ──────────────────────────────────────────────────────
+#
+# Builds cli_test, generates Verilator mem_init files from the binary,
+# copies them into the sim/mem_init/ directory, then runs the simulation.
+
+MEM_INIT = $(BUILD_DIR)/memoryInitFiles
+SIM_MEMINIT = $(SIM_DIR)/mem_init
+
+sim:
+	$(MAKE) SIM_BUILD=1 all tools
+	@echo "--- Generating interleaved RAM init files ---"
+	cd $(BUILD_DIR) && ../$(INTERLEAVED) -i cli_test.bin -o 0x800
+	@echo "--- Generating cli_sim.txt ---"
+	python3 -c "\
+import sys; \
+data = open('$(BUILD_DIR)/cli_sim.bin','rb').read(); \
+[print(f'{b:02x} ') for b in data]" \
+	> $(BUILD_DIR)/cli_sim.txt
+	@echo "--- Updating sim/mem_init ---"
+	@mkdir -p $(SIM_MEMINIT)
+	cp "$(MEM_INIT)/col0.mem" "$(SIM_MEMINIT)/TOP.core_v_mcu.i_soc_domain.l2_ram_i.CUTS[0].bank_i.u0.mem"
+	cp "$(MEM_INIT)/col1.mem" "$(SIM_MEMINIT)/TOP.core_v_mcu.i_soc_domain.l2_ram_i.CUTS[1].bank_i.u0.mem"
+	cp "$(MEM_INIT)/col2.mem" "$(SIM_MEMINIT)/TOP.core_v_mcu.i_soc_domain.l2_ram_i.CUTS[2].bank_i.u0.mem"
+	cp "$(MEM_INIT)/col3.mem" "$(SIM_MEMINIT)/TOP.core_v_mcu.i_soc_domain.l2_ram_i.CUTS[3].bank_i.u0.mem"
+	cp "$(MEM_INIT)/privateBank0.mem" "$(SIM_MEMINIT)/TOP.core_v_mcu.i_soc_domain.l2_ram_i.bank_sram_pri0_i.u0.mem"
+	cp "$(MEM_INIT)/privateBank1.mem" "$(SIM_MEMINIT)/TOP.core_v_mcu.i_soc_domain.l2_ram_i.bank_sram_pri1_i.u0.mem"
+	cp "$(BUILD_DIR)/cli_sim.txt" "$(SIM_MEMINIT)/cli.txt"
+	@echo "--- Running Verilator simulation ($(SIM_CYCLES) cycles) ---"
+	cd $(SIM_DIR) && ./sim_core_v_mcu +cycles=$(SIM_CYCLES)
+
+# ── FPGA: load via OpenOCD/GDB ────────────────────────────────────────────────
+#
+# Requires: JTAG cable connected, FPGA programmed with core-v-mcu bitstream,
+#           openocd-gdbpipe-hs2.cfg present in this directory.
+
+fpga-gdb: all
+	riscv32-corev-elf-gdb $(BUILD_DIR)/cli_test -x gdb_run
+
+# ── FPGA: program QSPI flash ──────────────────────────────────────────────────
+#
+# Requires: FPGA running, serial console connected.
+
+fpga-flash: all
+	python3 spi_load.py $(BUILD_DIR)/cli.bin
+
+# ── Clean ─────────────────────────────────────────────────────────────────────
+
+clean:
+	rm -rf $(BUILD_DIR)
+	rm -f $(INTERLEAVED) $(BIN2TXT)

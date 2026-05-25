@@ -6,3 +6,4 @@ cli_test/logfile.txt
 *.mem
 *.srec
 cli_test/Default/*
+cli_test/build/*

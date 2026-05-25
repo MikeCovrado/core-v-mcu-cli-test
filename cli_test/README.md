@@ -1,5 +1,88 @@
 # Using CLI Test on the CORE-V-MCU
 
+## Verilator Simulation
+
+### Prerequisites (one-time setup)
+
+Both repos must be cloned as siblings under the same parent directory:
+
+```
+<parent>/
+    core-v-mcu/
+    core-v-mcu-cli-test/
+```
+
+**Step 1 — Build the FuseSoC RTL model library** (from `core-v-mcu/claude/`):
+
+```bash
+~/venv/core-v-mcu/bin/fusesoc --cores-root .. run --target=model-lib --setup --build \
+    openhwgroup.org:systems:core-v-mcu
+```
+
+**Step 2 — Build the Verilator simulation binary** (from `core-v-mcu/claude/sim/`):
+
+```bash
+make verilator-sv
+```
+
+Produces `sim_core_v_mcu` and creates the `mem_init/` directory.
+
+**Step 3 — Populate the boot ROM image** (from `core-v-mcu/claude/sim/`):
+
+```bash
+make mem_init
+```
+
+Copies the boot ROM and stub memory files into `mem_init/`. Only needs to be
+repeated if `tb/mem_init_files/verilatorBoot.mem` changes.
+
+### Running a simulation
+
+From `core-v-mcu-cli-test/claude/cli_test/`:
+
+```bash
+make sim SIM_CYCLES=500000
+```
+
+This single target:
+- Cross-compiles the firmware with `-DSIM_BUILD`, which bypasses the QSPI flash
+  initialisation that would block on a DMA semaphore before the FreeRTOS scheduler starts
+- Generates interleaved L2 RAM initialisation files from the firmware binary
+- Copies them into `core-v-mcu/claude/sim/mem_init/`
+- Launches `sim_core_v_mcu +cycles=500000`
+
+500,000 cycles is enough to see the full CLI banner and prompt on UART0:
+
+```
+#*******************
+
+Command Line Interface
+
+May 24 2026 20:30:22
+
+App SW Version: cli_test v0.2 - NoInt
+
+
+
+#*******************
+
+[0] >
+```
+
+Boot ROM output appears on UART1 and is prefixed with `[U1]` in the simulation
+transcript.  To add a VCD waveform dump, pass `+trace=out.vcd` to the simulator
+directly:
+
+```bash
+cd ../../core-v-mcu/claude/sim
+./sim_core_v_mcu +cycles=500000 +trace=out.vcd
+```
+
+### Subsequent builds
+
+After the one-time setup, only `make sim SIM_CYCLES=500000` needs to be re-run
+whenever firmware source changes.
+
 ## Interrupt Assignments
 
 Interrupt 0 - 6   RESERVED for sw events

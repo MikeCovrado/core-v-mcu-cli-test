@@ -1,6 +1,8 @@
 #ifndef __BARR_MEM_TEST_H__
 #define __BARR_MEM_TEST_H__
 
+#include <stdint.h>
+
 typedef unsigned char datum;     /* Set the data bus width to 8 bits. */
 
 #define BASE_ADDRESS  (volatile datum *) (&__l2_shared_end)//(volatile datum *) 0x00000000
