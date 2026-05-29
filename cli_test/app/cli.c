@@ -52,6 +52,7 @@ extern const struct cli_cmd_entry fcb_cli_tests[];
 extern const struct cli_cmd_entry qspi_cli_tests[];
 extern const struct cli_cmd_entry sdio_cli_tests[];
 extern const struct cli_cmd_entry cam_tests[];
+extern const struct cli_cmd_entry csr_functions[];
 
 
 // MISC functions
@@ -139,6 +140,7 @@ const struct cli_cmd_entry my_main_menu[] = {
 		CLI_CMD_SUBMENU( "qspi", qspi_cli_tests, "commands for efpga tests"),
 		CLI_CMD_SUBMENU( "sdio", sdio_cli_tests, "commands for sdio tests"),
 		CLI_CMD_SUBMENU( "cam", cam_tests, "commands for Himax camera tests"),
+		CLI_CMD_SUBMENU( "csr", csr_functions, "commands for CSR tests"),
 		CLI_CMD_TERMINATE()
 
 };

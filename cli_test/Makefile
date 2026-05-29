@@ -39,7 +39,8 @@ APP_SRCS = \
 	app/gpio_map.c \
 	app/i2c_task.c \
 	app/programFPGA.c \
-	app/cam_tests.c
+	app/cam_tests.c \
+	app/cli_csr_tests.c
 
 HAL_SRCS = \
 	hal/source/hal_gpio.c \
