@@ -171,7 +171,7 @@ BIN2TXT     = utils/bin2txt/bin2txt
 
 # ── Primary targets ───────────────────────────────────────────────────────────
 
-.PHONY: all sim fpga-gdb fpga-flash tools clean
+.PHONY: all sim mem run-sim interactive run-interactive fpga-gdb fpga-flash tools clean
 
 all: $(BUILD_DIR)/cli_test $(BUILD_DIR)/cli_test.bin $(BUILD_DIR)/cli.bin $(BUILD_DIR)/cli_sim.bin
 
@@ -222,15 +222,17 @@ $(BIN2TXT): utils/bin2txt/main.c
 MEM_INIT = $(BUILD_DIR)/memoryInitFiles
 SIM_MEMINIT = $(SIM_DIR)/mem_init
 
-sim:
+# Build firmware and stage every memory-init file the simulation needs, without
+# running it.  Use this to refresh mem_init/ before a separate `run-sim`.
+mem:
 	$(MAKE) SIM_BUILD=1 all tools
 	@echo "--- Generating interleaved RAM init files ---"
 	cd $(BUILD_DIR) && ../$(INTERLEAVED) -i cli_test.bin -o 0x800
 	@echo "--- Generating cli_sim.txt ---"
 	python3 -c "\
-import sys; \
-data = open('$(BUILD_DIR)/cli_sim.bin','rb').read(); \
-[print(f'{b:02x} ') for b in data]" \
+	import sys; \
+	data = open('$(BUILD_DIR)/cli_sim.bin','rb').read(); \
+	[print(f'{b:02x} ') for b in data]" \
 	> $(BUILD_DIR)/cli_sim.txt
 	@echo "--- Updating sim/mem_init ---"
 	@mkdir -p $(SIM_MEMINIT)
@@ -241,8 +243,30 @@ data = open('$(BUILD_DIR)/cli_sim.bin','rb').read(); \
 	cp "$(MEM_INIT)/privateBank0.mem" "$(SIM_MEMINIT)/TOP.core_v_mcu.i_soc_domain.l2_ram_i.bank_sram_pri0_i.u0.mem"
 	cp "$(MEM_INIT)/privateBank1.mem" "$(SIM_MEMINIT)/TOP.core_v_mcu.i_soc_domain.l2_ram_i.bank_sram_pri1_i.u0.mem"
 	cp "$(BUILD_DIR)/cli_sim.txt" "$(SIM_MEMINIT)/cli.txt"
+	cp "$(SIM_DIR)/../tb/mem_init_files/verilatorBoot.mem" "$(SIM_MEMINIT)/boot.mem"
+	@echo "--- Creating tb_core_v_mcu.dut.* symlinks (active testbench hierarchy) ---"
+	@cd $(SIM_MEMINIT) && for f in TOP.core_v_mcu.*; do \
+	    ln -sf "$$f" "$$(echo "$$f" | sed 's/TOP\.core_v_mcu/tb_core_v_mcu.dut/')"; \
+	done
+# Run the (already built) Verilator model against the staged mem_init/ files.
+run-sim:
 	@echo "--- Running Verilator simulation ($(SIM_CYCLES) cycles) ---"
 	cd $(SIM_DIR) && ./sim_core_v_mcu +cycles=$(SIM_CYCLES)
+
+# Convenience: stage memory files then run the simulation (original behaviour).
+sim: mem run-sim
+
+# Run the (already built) model with the interactive terminal enabled: the
+# controlling terminal's stdin is fed to UART0 RX (keyboard -> CLI) while
+# UART0/UART1 TX print to stdout.  Runs until Ctrl+C unless a cycle bound is
+# given with INT_CYCLES=N.  Must be run on a real TTY (not through a pipe).
+INT_CYCLES ?=
+run-interactive:
+	@echo "--- Interactive simulation: keyboard <-> UART0 (Ctrl+C to exit) ---"
+	cd $(SIM_DIR) && ./sim_core_v_mcu +interactive $(if $(INT_CYCLES),+cycles=$(INT_CYCLES))
+
+# Convenience: stage memory files then run interactively.
+interactive: mem run-interactive
 
 # ── FPGA: load via OpenOCD/GDB ────────────────────────────────────────────────
 #
